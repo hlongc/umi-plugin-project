@@ -1,9 +1,9 @@
 import { defineConfig } from '@umijs/max';
 
 export default defineConfig({
-  plugins:[require.resolve('./plugins/model')],
+  plugins: [require.resolve('./plugins2/model')],
   antd: {},
-  ronnieModel:{ name: 'hlc' },
+  hlcModel: { name: 'ronnie' },
   routes: [
     {
       path: '/',
@@ -27,4 +27,3 @@ export default defineConfig({
   ],
   npmClient: 'pnpm',
 });
-
