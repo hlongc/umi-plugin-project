@@ -6,7 +6,7 @@ import { IApi } from '@umijs/max';
 import { Loader, TransformResult, transformSync } from 'esbuild';
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { minimatch } from 'minimatch';
-import { basename, extname, join, relative } from 'path';
+import { basename, dirname, extname, format, join, relative } from 'path';
 
 export function getIdentifierDeclaration(node: t.Node, path: Babel.NodePath) {
   if (t.isIdentifier(node) && path.scope.hasBinding(node.name)) {
@@ -18,7 +18,7 @@ export function getIdentifierDeclaration(node: t.Node, path: Babel.NodePath) {
   }
   return node;
 }
-
+/** 将路径转换为通用格式，除windows长路径 */
 export function winPath(path: string) {
   const isExtendedLengthPath = /^\\\\\?\\/.test(path);
   if (isExtendedLengthPath) {
@@ -26,6 +26,23 @@ export function winPath(path: string) {
   }
   return path.replace(/\\/g, '/');
 }
+
+export function withTmpPath(opts: {
+  api: IApi;
+  path: string;
+  noPluginDir?: boolean;
+}) {
+  return winPath(
+    join(
+      opts.api.paths.absTmpPath,
+      opts.api.plugin.key && !opts.noPluginDir
+        ? `plugin-${opts.api.plugin.key}`
+        : '',
+      opts.path,
+    ),
+  );
+}
+
 /** 生成命名空间 */
 function getNamespace(absFilePath: string, absSrcPath: string) {
   const relPath = winPath(relative(winPath(absSrcPath), winPath(absFilePath)));
@@ -46,7 +63,7 @@ function getNamespace(absFilePath: string, absSrcPath: string) {
   return [...validDirs, normalizedFile].join('.');
 }
 
-export class Module {
+export class Model {
   /** 文件path */
   file: string;
   /** 命名空间，useModel("xxx")中的xxx */
@@ -70,7 +87,37 @@ export class Module {
     this.file = _file;
     this.namespace = namespace || getNamespace(_file, absSrcPath);
     this.exportName = exportName || 'default';
-    this.deps = [];
+    this.deps = this.findDeps();
+  }
+  /** 找出当前model依赖的其他model */
+  findDeps() {
+    const content = readFileSync(this.file, 'utf8');
+    const loader = extname(this.file).slice(1) as Loader;
+    const result = transformSync(content, {
+      loader,
+      minify: false,
+      sourcemap: false,
+    });
+
+    const ast = parser.parse(result.code, {
+      sourceFilename: this.file,
+      sourceType: 'module',
+      plugins: [],
+    });
+
+    const deps = new Set<string>();
+    traverse(ast, {
+      CallExpression(path) {
+        if (
+          t.isIdentifier(path.node.callee, { name: 'useModel' }) &&
+          t.isStringLiteral(path.node.arguments[0])
+        ) {
+          deps.add(path.node.arguments[0].value);
+        }
+      },
+    });
+
+    return [...deps];
   }
 }
 
@@ -105,13 +152,16 @@ export class ModelUtils {
   }
 
   getAllModels({ extraModels = [] }: { extraModels?: string[] }) {
+    let id = 0;
     const models = [
       ...this.getModels({
         pattern: '**/*.{ts,tsx,js,jsx}',
         base: join(this.api.paths.absSrcPath, 'models'),
       }),
       ...extraModels,
-    ].map((file) => {});
+    ].map((file) => {
+      return new Model(file, this.api.paths.absSrcPath, ++id);
+    });
 
     return models;
   }
@@ -175,5 +225,38 @@ export class ModelUtils {
     });
 
     return ret;
+  }
+
+  static getContents(models: Model[]) {
+    const imports: string[] = [];
+    const modelsContent: string[] = [];
+
+    models.forEach((model) => {
+      const fileWithoutExt = winPath(
+        format({
+          dir: dirname(model.file),
+          base: basename(model.file, extname(model.file)),
+        }),
+      );
+      if (model.exportName !== 'default') {
+        imports.push(
+          `import ${model.exportName} as ${model.id} from '${fileWithoutExt}';`,
+        );
+      } else {
+        imports.push(`import ${model.id} from '${fileWithoutExt}';`);
+      }
+
+      modelsContent.push(
+        `${model.id}: { namespace: '${model.namespace}', model: ${model.id} }`,
+      );
+    });
+
+    return `
+${imports.join('\n')}
+
+export const models = {
+${modelsContent.join(',\n')}
+} as const;
+    `;
   }
 }
