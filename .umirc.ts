@@ -4,6 +4,7 @@ export default defineConfig({
   plugins: [require.resolve('./plugins2/model')],
   antd: {},
   hlcModel: { name: 'ronnie' },
+  // model: {},
   routes: [
     {
       path: '/',

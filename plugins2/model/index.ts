@@ -34,7 +34,6 @@ export default (api: IApi) => {
 
   api.onGenerateFiles(async () => {
     const models = await getModels(api);
-    console.log(api.appData);
     api.writeTmpFile({
       path: 'model.ts',
       content: ModelUtils.getContents(models),

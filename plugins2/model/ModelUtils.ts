@@ -8,6 +8,14 @@ import { readdirSync, readFileSync, statSync } from 'fs';
 import { minimatch } from 'minimatch';
 import { basename, dirname, extname, format, join, relative } from 'path';
 
+interface ITopologicalNode {
+  namespace: string;
+  deps: string[];
+  index: number;
+  in: number;
+  childs: ITopologicalNode[];
+}
+
 export function getIdentifierDeclaration(node: t.Node, path: Babel.NodePath) {
   if (t.isIdentifier(node) && path.scope.hasBinding(node.name)) {
     let bindingNode = path.scope.getBinding(node.name)!.path.node;
@@ -162,9 +170,77 @@ export class ModelUtils {
     ].map((file) => {
       return new Model(file, this.api.paths.absSrcPath, ++id);
     });
+    // 对模块进行拓扑排序，解决模块之间互相依赖问题
+    const namespaces: string[] = ModelUtils.topologicalSort(models);
+    models.sort(
+      (a, b) =>
+        namespaces.indexOf(a.namespace) - namespaces.indexOf(b.namespace),
+    );
 
     return models;
   }
+
+  // https://github.com/umijs/umi/issues/9837
+  static topologicalSort = (models: Model[]) => {
+    // build depts graph
+    const graph: Array<ITopologicalNode | undefined> = [];
+    const namespaceToNode: Record<string, ITopologicalNode> = {};
+    models.forEach((model, index) => {
+      const node: ITopologicalNode = {
+        namespace: model.namespace,
+        deps: model.deps,
+        index,
+        in: 0,
+        childs: [],
+      };
+      if (namespaceToNode[model.namespace]) {
+        throw new Error(`Duplicate namespace in models: ${model.namespace}`);
+      }
+      namespaceToNode[model.namespace] = node;
+      graph.push(node);
+    });
+
+    // build edges.
+    (graph as ITopologicalNode[]).forEach((node) => {
+      node.deps.forEach((dep) => {
+        const depNode = namespaceToNode[dep];
+        if (!depNode) {
+          throw new Error(`Model namespace not found: ${dep}`);
+        }
+        depNode.childs.push(node);
+        node.in++;
+      });
+    });
+
+    const queue: string[] = [];
+    while (true) {
+      // find first 0 in node;
+      const zeronode = graph.find((n) => {
+        return n && n.in === 0;
+      });
+      if (!zeronode) {
+        break;
+      }
+
+      queue.push(zeronode.namespace);
+      zeronode.childs.forEach((child) => {
+        child.in--;
+      });
+      zeronode.childs = [];
+      delete graph[zeronode.index];
+    }
+
+    const leftNodes = graph.filter(Boolean) as ITopologicalNode[];
+    if (leftNodes.length > 0) {
+      throw new Error(
+        `Circle dependency detected in models: ${leftNodes
+          .map((m) => m.namespace)
+          .join(', ')}`,
+      );
+    }
+
+    return queue;
+  };
 
   getModels({ pattern, base }: { pattern: string; base: string }) {
     return this.glob(base, pattern).filter((url) => {

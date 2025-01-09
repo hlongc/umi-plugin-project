@@ -6,6 +6,7 @@ import {
   ReactNode,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -63,11 +64,11 @@ function Executor(props: ExecutorProps) {
       e,
     );
   }
-
-  useEffect(() => {
+  // 首次渲染时立即执行初始化
+  useMemo(() => {
     onupdateRef.current(data);
   }, []);
-
+  // 后续更新时，执行更新
   useEffect(() => {
     if (initialRef.current) {
       onupdateRef.current(data);
@@ -201,4 +202,6 @@ export function useModel<N extends Namespaces, S>(
       dispatcher.callbacks[namespace].delete(handler);
     };
   }, [namespace]);
+
+  return state;
 }

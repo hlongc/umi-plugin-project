@@ -3,7 +3,8 @@ import { useModel } from '@umijs/max';
 import { useState } from 'react';
 
 const useUser = () => {
-  const {} = useModel('aaa.user');
+  const { age } = useModel('aaa.user');
+  console.log('useUser age', age);
   const [name, setName] = useState<string>('ronnie');
   return {
     name,
