@@ -50,7 +50,13 @@ export function processCssFiles(outputPath: string): void {
         urlRegex,
         (match, imgPath, extension, offset) => {
           // 如果已经是WebP或者是数据URI，不处理
-          if (imgPath.endsWith('.webp') || imgPath.startsWith('data:')) {
+          // 如果是WebP、数据URI或网络图片（以http或https开头），不处理
+          if (
+            imgPath.endsWith('.webp') ||
+            imgPath.startsWith('data:') ||
+            imgPath.startsWith('http://') ||
+            imgPath.startsWith('https://')
+          ) {
             return match;
           }
 
@@ -76,22 +82,15 @@ export function processCssFiles(outputPath: string): void {
           // 构造WebP版本的路径
           const webpPath = imgPath.replace(/\.(jpe?g|png)$/i, '.webp');
 
-          // 构造支持WebP的CSS，使用image-set()或者@supports条件
-          // 方法1: 使用image-set (更现代但支持有限)
-          // return `url("${imgPath}"), image-set(url("${webpPath}") type("image/webp"), url("${imgPath}") type("image/jpeg"))`;
-
-          // 方法2: 使用@supports (更好的兼容性)
-          // 但由于我们不能在这里直接插入@supports块，我们需要返回一个特殊的标记
-          // 这个标记将在后续处理中被替换为完整的@supports块
+          // 使用特殊标记，后续替换
           return `__WEBP_PLACEHOLDER__${imgPath}__${webpPath}__`;
         },
       );
 
-      // 处理特殊标记，将它们替换为@supports块
-      // 这种方法允许我们为每个图片添加单独的@supports检查
+      // 处理特殊标记，将它们替换为CSS变量方案
       const placeholderRegex = /__WEBP_PLACEHOLDER__([^_]+)__([^_]+)__/g;
 
-      // 收集所有需要添加@supports块的图片
+      // 收集所有需要添加CSS变量处理的图片
       const webpReplacements: Array<{ original: string; webp: string }> = [];
       let match;
       while ((match = placeholderRegex.exec(cssContent)) !== null) {
@@ -106,10 +105,8 @@ export function processCssFiles(outputPath: string): void {
         // 先替换所有占位符为原始URL
         cssContent = cssContent.replace(placeholderRegex, 'url("$1")');
 
-        // 在CSS文件末尾添加@supports块
-        cssContent += '\n\n/* WebP支持检测和替换 */\n';
-        cssContent +=
-          '@supports (background-image: url(data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA=)) {\n';
+        // 在CSS文件末尾添加WebP相关的CSS变量样式规则
+        cssContent += '\n\n/* WebP支持检测和替换 - 使用CSS变量方案 */\n';
 
         // 为每个图片添加WebP版本的选择器
         webpReplacements.forEach(({ original, webp }) => {
@@ -130,13 +127,23 @@ export function processCssFiles(outputPath: string): void {
               .substring(0, fullRule.indexOf('{'))
               .trim();
 
-            // 为该选择器添加WebP版本，使用多重背景实现回退
-            // 如果WebP图片不存在，浏览器会自动尝试加载第二个背景图片（原始图片）
-            cssContent += `  ${selector} { background-image: url("${webp}"), url("${original}"); }\n`;
+            // 使用CSS变量选择器而不是属性选择器
+            // 为支持WebP的情况添加样式（通过CSS变量）
+            cssContent += `html[data-webp-support="yes"] {\n`;
+            cssContent += `  ${selector} { background-image: url("${webp}"); }\n`;
+            cssContent += `}\n\n`;
+
+            // 为不支持WebP的情况添加样式（通过CSS变量）
+            // 注意：下面这段可以省略，因为默认规则已经使用原始图片
+            // 但为了完整性和明确性，我们还是添加它
+            cssContent += `html[data-webp-support="no"] {\n`;
+            cssContent += `  ${selector} { background-image: url("${original}"); }\n`;
+            cssContent += `}\n\n`;
           }
         });
 
-        cssContent += '}\n';
+        // 添加WebP检测脚本，在HTML中插入该脚本
+        // 注意：通常这个脚本应该通过插件的其他部分注入到HTML中，这里只生成样式规则
 
         // 写回文件
         fs.writeFileSync(cssFilePath, cssContent);

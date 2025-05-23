@@ -1,84 +1,153 @@
-/**
- * WebP 图片转换插件
- * 该插件用于将项目中的 JPG、JPEG、PNG 图片转换为 WebP 格式
- * WebP 格式通常提供更好的压缩效果，能够减小图片体积，加快网页加载速度
- */
-
-// 导入需要的 Node.js 核心模块和第三方库
-import type { IApi } from '@umijs/max'; // 导入 Umi 的 API 类型定义
-import fs from 'fs'; // 文件系统模块，用于读写文件
+import fs from 'fs';
 import glob from 'glob'; // 文件匹配模块，用于查找符合条件的文件
-import path from 'path'; // 路径处理模块，用于处理文件路径
+import path from 'path';
 import sharp from 'sharp'; // 图片处理库，用于转换图片格式
+import type { Compiler, RuleSetRule } from 'webpack';
 import { formatSize } from './common';
 import { processCssFiles } from './css-processor'; // 导入CSS处理器
 
-// 定义配置选项接口
 interface WebpConverterConfig {
-  quality?: number; // 图片质量，范围 0-100
-  lossless?: boolean; // 是否使用无损压缩
-  onlySmallerFiles?: boolean; // 是否只保留比原文件小的 WebP
-  minQuality?: number; // 当 WebP 文件比原文件大时，尝试降低质量的最低限制
-  processCss?: boolean; // 是否处理CSS文件中的图片URL
+  /** 图片质量，范围 0-100， 默认 85 */
+  quality?: number;
+  /** 是否使用无损压缩， 默认 false */
+  lossless?: boolean;
+  /** 是否只保留比原文件小的 WebP， 默认 true */
+  onlySmallerFiles?: boolean;
+  /** 当 WebP 文件比原文件大时，尝试降低质量的最低限制， 默认 70 */
+  minQuality?: number;
+  /** 是否处理CSS文件中的图片URL， 默认 true */
+  processCss?: boolean;
 }
 
-// 导出插件主函数，该函数接收 api 参数，这是 Umi 提供的插件 API 接口
-export default function (api: IApi) {
-  // 注册插件，设置插件名称和配置项验证规则
-  api.describe({
-    key: 'webpConverter', // 插件的唯一标识，也是配置项在 .umirc.ts 中的键名
-    config: {
-      // 定义配置项的数据类型和默认值
-      schema(joi) {
-        return joi.object({
-          // 图片质量，范围 0-100，值越高质量越好，但文件越大
-          quality: joi.number().default(85),
+/**
+ * 文件信息类型
+ */
+interface FileInfo {
+  path: string;
+  ext: string;
+  isImage: boolean;
+}
 
-          // 是否使用无损压缩，true 为无损（保留所有细节但文件较大），false 为有损（可能损失细节但文件更小）
-          lossless: joi.boolean().default(false),
+class WebpackImportWebpPlugin {
+  private options: WebpConverterConfig = {
+    quality: 85,
+    lossless: false,
+    onlySmallerFiles: true,
+    minQuality: 70,
+    processCss: true,
+  };
+  /** 临时写入的文件路径，编译完成以后要删除 */
+  private tempWebpFiles: string[] = [];
+  /** 已处理过的图片路径缓存 */
+  private processedImagePaths: Set<string> = new Set();
 
-          // 是否只保留比原文件小的 WebP 图片，true 表示只有当 WebP 比原图小时才保留
-          onlySmallerFiles: joi.boolean().default(true),
+  constructor(options: WebpConverterConfig) {
+    this.options = { ...this.options, ...options };
+  }
 
-          // 当 WebP 文件比原文件大时，尝试降低质量的最低限制
-          minQuality: joi.number().default(70),
+  extractFileInfo(filePath: string): FileInfo {
+    // 获取扩展名
+    const extMatch = filePath.match(/\.([^.]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : '';
 
-          // 是否处理CSS文件中的图片URL
-          processCss: joi.boolean().default(true),
-        });
+    return {
+      path: filePath,
+      ext,
+      isImage: /^jpe?g$|^png$/.test(ext),
+    };
+  }
+
+  apply(compiler: Compiler) {
+    console.log('插件apply');
+
+    const tempWebpFiles = this.tempWebpFiles;
+    const processedImagePaths = this.processedImagePaths;
+
+    // 注册loader，用于处理图片导入
+    const webpLoaderRule: RuleSetRule = {
+      test: /\.(js|jsx|ts|tsx)$/,
+      // 排除 node_modules 文件夹，避免处理不必要的文件
+      exclude: /node_modules/,
+      use: [
+        {
+          loader: path.resolve(__dirname, './webpack-import-loader.ts'),
+          options: {
+            ...this.options,
+            // 传递已处理图片路径的引用
+            processedImagePaths,
+          },
+        },
+      ],
+      enforce: 'pre',
+    };
+
+    // 添加自定义loader规则
+    compiler.hooks.afterEnvironment.tap('WebpackImportWebpPlugin', () => {
+      if (compiler.options.module && compiler.options.module.rules) {
+        compiler.options.module.rules.push(webpLoaderRule);
+      }
+    });
+
+    // 创建一个上下文对象，用于在 loader 中共享数据
+    const webpLoaderContext = {
+      processedImagePaths,
+      addTmpWebpFile: (filePath: string) => {
+        if (!tempWebpFiles.includes(filePath)) {
+          tempWebpFiles.push(filePath);
+        }
       },
-    },
-  });
+    };
 
-  // 从 .umirc.ts 中获取用户配置，如果没有配置则使用默认值
-  const config: WebpConverterConfig = api.userConfig.webpConverter || {};
+    compiler.hooks.thisCompilation.tap(
+      'WebpackImportWebpPlugin',
+      async (compilation) => {
+        // 将上下文对象添加到 compilation 中
+        (compilation as any).webpLoaderContext = webpLoaderContext;
+      },
+    );
 
-  // 设置图片质量，范围 0-100
-  const quality = config.quality || 85;
+    if (process.env.NODE_ENV === 'production') {
+      // 注册编译完成钩子，清理临时WebP文件
+      compiler.hooks.done.tap('WebpackImportWebpPlugin', () => {
+        if (tempWebpFiles.length > 0) {
+          console.log(
+            `[WebP Converter] 正在清理 ${tempWebpFiles.length} 个临时WebP文件...`,
+          );
+          for (const filePath of tempWebpFiles) {
+            try {
+              if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+                console.log(`[WebP Converter] 正在清理 ${filePath}`);
+              }
+            } catch (err) {
+              console.error(`[WebP Converter] 删除文件 ${filePath} 失败:`, err);
+            }
+          }
+          // 清空数组
+          tempWebpFiles.length = 0;
+          // 清空处理过的路径缓存
+          processedImagePaths.clear();
+          console.log('[WebP Converter] 临时文件清理完成');
+        }
 
-  // 是否使用无损压缩
-  const lossless = config.lossless || false;
-
-  // 是否只保留比原文件小的 WebP 文件，默认为 true
-  const onlySmallerFiles = config.onlySmallerFiles !== false;
-
-  // 最低允许的图片质量，用于动态调整时
-  const minQuality = config.minQuality || 70;
-
-  // 是否处理CSS文件中的图片URL，默认为 true
-  const processCss = config.processCss !== false;
-
-  // 注册构建完成后的钩子函数，在项目构建完成后执行 WebP 转换
-  api.onBuildComplete(({ err }: { err?: Error }) => {
-    // 如果构建过程中出现错误，不执行转换
-    if (err || process.env.NODE_ENV !== 'production') {
-      return;
+        this.convertToWebp(compiler.options.output.path!);
+        // 获取当前的工作目录
+        const cwd = process.cwd();
+        console.log('当前工作目录', cwd);
+      });
     }
+  }
 
+  convertToWebp(distDir: string) {
     console.log('开始处理图片转换为 WebP...');
 
-    // 获取输出目录的绝对路径（通常是 dist 目录）
-    const distDir = api.paths.absOutputPath;
+    const {
+      quality = 85,
+      lossless = false,
+      onlySmallerFiles = true,
+      minQuality = 70,
+      processCss = true,
+    } = this.options;
 
     // 查找所有 jpg、jpeg、png 图片文件
     // glob.sync 会返回所有匹配指定模式的文件路径数组
@@ -99,6 +168,14 @@ export default function (api: IApi) {
 
         // 读取原始图片文件到内存
         const imageBuffer = fs.readFileSync(imagePath);
+
+        // 构建 WebP 文件路径，与原文件同目录，文件名替换为 .webp 后缀
+
+        const webpPath = `${imagePath.replace(/\.(jpg|jpeg|png)$/, '.webp')}`;
+        if (fs.existsSync(webpPath)) {
+          console.log(`已处理过: ${imagePath} -> ${webpPath}，跳过重复处理`);
+          return;
+        }
 
         // 获取原始图片文件大小（字节）
         const originalSize = imageBuffer.length;
@@ -141,10 +218,6 @@ export default function (api: IApi) {
         // 1. WebP 比原图小，或者
         // 2. 配置了不仅保留小文件（onlySmallerFiles 为 false）
         if (webpSize < originalSize || !onlySmallerFiles) {
-          // 构建 WebP 文件路径，与原文件同目录，文件名替换为 .webp 后缀
-
-          const webpPath = `${imagePath.replace(/\.(jpg|jpeg|png)$/, '.webp')}`;
-
           // 将 WebP 图片写入到文件系统
           fs.writeFileSync(webpPath, webpBuffer);
 
@@ -219,5 +292,7 @@ export default function (api: IApi) {
         // 捕获并输出整体处理过程中的错误
         console.error('WebP 转换过程中出错:', error);
       });
-  });
+  }
 }
+
+export default WebpackImportWebpPlugin;

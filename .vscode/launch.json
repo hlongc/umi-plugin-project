@@ -4,10 +4,30 @@
     {
       "type": "node",
       "request": "launch",
-      "name": "Debug Umi Plugin",
-      "program": "${workspaceFolder}/node_modules/@umijs/max/bin/umi.js",
+      "name": "Debug UMI Build",
+      "program": "${workspaceFolder}/node_modules/@umijs/max/bin/max.js",
+      "args": ["build"],
+      "skipFiles": ["<node_internals>/**"],
+      "outFiles": ["${workspaceFolder}/**/*.ts"],
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "env": {
+        "NODE_OPTIONS": "--inspect-brk"
+      }
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug UMI Dev",
+      "program": "${workspaceFolder}/node_modules/@umijs/max/bin/max.js",
       "args": ["dev"],
-      "skipFiles": ["<node_internals>/**"]
+      "skipFiles": ["<node_internals>/**"],
+      "outFiles": ["${workspaceFolder}/**/*.js"],
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "env": {
+        "NODE_OPTIONS": "--inspect-brk"
+      }
     }
   ]
 }

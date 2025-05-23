@@ -110,7 +110,9 @@ export function ImageWebp({
     if (
       isError ||
       isSupportWebp === 2 ||
-      process.env.NODE_ENV === 'development'
+      process.env.NODE_ENV === 'development' ||
+      src.startsWith('http://') ||
+      src.startsWith('https://')
     )
       return src;
 
