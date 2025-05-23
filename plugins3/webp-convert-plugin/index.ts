@@ -85,6 +85,40 @@ export default function (api: IApi) {
     );
   }
 
+  api.onGenerateFiles(() => {
+    // 在插件中追加类型声明
+    const typingsPath = path.join(api.paths.absTmpPath, 'typings.d.ts');
+
+    // 文件存在才追加
+    if (fs.existsSync(typingsPath)) {
+      // 要追加的内容
+      const webpTypes = `
+// WebP图片类型声明
+declare module '*.jpg!webp' {
+  const src: string;
+  export default src;
+}
+
+declare module '*.jpeg!webp' {
+  const src: string;
+  export default src;
+}
+
+declare module '*.png!webp' {
+  const src: string;
+  export default src;
+}
+`;
+
+      // 读取现有内容，检查是否已包含WebP类型声明
+      const existingContent = fs.readFileSync(typingsPath, 'utf8');
+      if (!existingContent.includes('*.jpg!webp')) {
+        // 追加内容到文件
+        fs.appendFileSync(typingsPath, webpTypes, 'utf8');
+        console.log('WebP类型声明已添加到typings.d.ts');
+      }
+    }
+  });
   // 注册构建完成后的钩子函数，在项目构建完成后执行 WebP 转换
   api.onBuildComplete(({ err }: { err?: Error }) => {
     // 如果构建过程中出现错误，不执行转换
